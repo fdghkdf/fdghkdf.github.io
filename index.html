@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="data:," />
+    <title>DEX 监控看板（网页版）</title>
+    <style>
+      :root {
+        --bg: #f4f5f7;
+        --surface: #ffffff;
+        --surface-2: #eceef1;
+        --ink: #14181d;
+        --ink-2: #4b5563;
+        --ink-3: #8a94a3;
+        --line: #dde1e7;
+        --accent: #0e7a4f;
+        --accent-ink: #0a5c3c;
+        --pos: #0e7a4f;
+        --neg: #c2333b;
+        --warn-bg: #fdf0e3;
+        --warn-ink: #9a5410;
+        --alert-bg: #fdecec;
+        --alert-ink: #a11922;
+        --chip-bg: #eef1f4;
+        --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0d1116;
+          --surface: #161c24;
+          --surface-2: #1d242f;
+          --ink: #e8ecf1;
+          --ink-2: #a7b0bd;
+          --ink-3: #6d7885;
+          --line: #262f3b;
+          --accent: #2fbf8f;
+          --accent-ink: #5fd7ae;
+          --pos: #34c98e;
+          --neg: #f0666e;
+          --warn-bg: #3a2a16;
+          --warn-ink: #f0b26b;
+          --alert-bg: #3d1d20;
+          --alert-ink: #ff9aa1;
+          --chip-bg: #202833;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--sans);
+        font-size: 15px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; }
+
+      /* ---------- 状态条 ---------- */
+      .statusbar {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+        margin-bottom: 18px;
+      }
+      .statusbar h1 { font-size: 20px; font-weight: 700; margin: 0; letter-spacing: .01em; }
+      .live-dot {
+        width: 9px; height: 9px; border-radius: 50%; background: var(--accent);
+        display: inline-block; flex: none;
+      }
+      .live-dot.stale { background: var(--neg); }
+      .live-dot.loading { background: var(--ink-3); }
+      .status-text { color: var(--ink-2); font-size: 13px; }
+      .status-text b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+      .spacer { flex: 1; }
+      .venue-health { display: flex; flex-wrap: wrap; gap: 6px; }
+      .vchip {
+        font-size: 12px; padding: 3px 9px; border-radius: 999px;
+        background: var(--chip-bg); color: var(--ink-2); white-space: nowrap;
+      }
+      .vchip.ok { color: var(--accent-ink); }
+      .vchip.bad { background: var(--alert-bg); color: var(--alert-ink); }
+      button.refresh {
+        font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+        border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+        border-radius: 8px; padding: 6px 14px;
+      }
+      button.refresh:hover { border-color: var(--ink-3); }
+      button.refresh:disabled { opacity: .55; cursor: wait; }
+
+      /* ---------- 概览条 ---------- */
+      .overview {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 12px; margin-bottom: 22px;
+      }
+      .ov-card {
+        background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+        padding: 14px 16px;
+      }
+      .ov-card .k { font-size: 12px; color: var(--ink-3); margin-bottom: 4px; }
+      .ov-card .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.25; }
+      .ov-card .v small { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+      .ov-card .sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; font-variant-numeric: tabular-nums; }
+      .pos { color: var(--pos); }
+      .neg { color: var(--neg); }
+
+      /* ---------- 区块 ---------- */
+      section { margin-bottom: 30px; }
+      .sec-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+      .sec-head h2 { font-size: 16px; font-weight: 700; margin: 0; }
+      .sec-head .note { font-size: 12.5px; color: var(--ink-3); }
+      .table-card {
+        background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+        overflow: hidden;
+      }
+      table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+      th, td { padding: 9px 12px; text-align: right; white-space: nowrap; }
+      th:first-child, td:first-child { text-align: left; }
+      thead th {
+        font-size: 12px; font-weight: 600; color: var(--ink-2);
+        background: var(--surface-2); border-bottom: 1px solid var(--line);
+      }
+      tbody tr { border-bottom: 1px solid var(--line); }
+      tbody tr:last-child { border-bottom: none; }
+      tbody tr:hover { background: var(--surface-2); }
+      td.sym, th.sym { font-weight: 700; }
+      td.num { font-family: var(--mono); font-size: 13.5px; }
+      td.dim { color: var(--ink-3); }
+      tr.row-alert { background: var(--alert-bg); }
+      tr.row-alert:hover { background: var(--alert-bg); }
+      .badge {
+        display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px;
+        border-radius: 999px; margin-left: 7px; vertical-align: 1px;
+      }
+      .badge.spread { background: var(--alert-bg); color: var(--alert-ink); }
+      .badge.fund { background: var(--warn-bg); color: var(--warn-ink); }
+      .empty-note { padding: 22px 16px; color: var(--ink-2); font-size: 13.5px; text-align: center; }
+
+      /* 手机：宽表转卡片行 */
+      @media (max-width: 760px) {
+        .wrap { padding: 14px 10px 40px; }
+        table, thead, tbody, tr, td { display: block; }
+        thead { display: none; }
+        tbody tr { padding: 10px 12px; }
+        td { padding: 2px 0; text-align: left; white-space: normal; display: flex; justify-content: space-between; gap: 16px; }
+        td::before { content: attr(data-th); color: var(--ink-3); font-size: 12.5px; font-family: var(--sans); }
+        td.sym { font-size: 16px; }
+        td.sym::before { content: none; }
+        td.num { font-size: 13.5px; }
+      }
+
+      footer { color: var(--ink-3); font-size: 12.5px; line-height: 1.7; }
+      footer a { color: var(--ink-2); }
+      .cheap-hint { font-size: 11px; font-weight: 400; color: var(--ink-3); margin-left: 6px; white-space: nowrap; }
+      td.dir { font-family: var(--sans); font-size: 12.5px; white-space: normal; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+
+      <div class="statusbar">
+        <h1>DEX 监控看板</h1>
+        <span class="live-dot loading" id="liveDot" aria-hidden="true"></span>
+        <span class="status-text" id="statusText">正在拉取 6 家数据源行情…</span>
+        <span class="spacer"></span>
+        <div class="venue-health" id="venueHealth"></div>
+        <button class="refresh" id="refreshBtn" type="button">立即刷新</button>
+      </div>
+
+      <div class="overview" id="overview"></div>
+
+      <section>
+        <div class="sec-head">
+          <h2>跨所价差 · Lighter vs Arcus</h2>
+          <span class="note">与 App 版同一口径：价差 = |Lighter − Arcus| / 两边中间价（标记价），≥ 0.30% 标红；极差 = 同行五家价格（含 Ondo 现货）的最高 − 最低。附 Nado、Variational 价格与 Ondo 现货基准。</span>
+        </div>
+        <div class="table-card">
+          <table id="spreadTable">
+            <thead>
+              <tr>
+                <th class="sym">标的</th><th>Lighter</th><th>Arcus</th><th>价差 %</th><th>极差 %</th>
+                <th>Nado</th><th>Variational</th><th>Ondo 现货</th>
+              </tr>
+            </thead>
+            <tbody id="spreadBody">
+              <tr><td colspan="8"><div class="empty-note">加载中…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-head">
+          <h2>大宗商品</h2>
+          <span class="note">XAU / XAUT / XAG 没有 Arcus 对手盘，不算 Lighter↔Arcus 价差，看多家极差；SLV 两边都有，价差口径同上。</span>
+        </div>
+        <div class="table-card">
+          <table id="cmdtyTable">
+            <thead>
+              <tr>
+                <th class="sym">标的</th><th>Lighter</th><th>Arcus</th><th>价差 %</th><th>极差 %</th>
+                <th>Nado</th><th>Variational</th><th>Ondo 现货</th>
+              </tr>
+            </thead>
+            <tbody id="cmdtyBody">
+              <tr><td colspan="8"><div class="empty-note">加载中…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-head">
+          <h2>可执行套利价差</h2>
+          <span class="note">与 App 版同一口径：Lighter 用真实买一/卖一，Arcus 无公开盘口用标记价（估算）；净价差 = 毛价差 − 双边 taker 手续费 − 滑点缓冲 0.05%，估算收益按本金 $1,000（App 版默认设置）。净 ≥ 0.30% 标红。</span>
+        </div>
+        <div class="table-card">
+          <table id="execTable">
+            <thead>
+              <tr>
+                <th class="sym">标的</th><th>方向</th><th>买价</th><th>卖价</th>
+                <th>毛 %</th><th>手续费 %</th><th>净 %</th><th>估算收益</th>
+              </tr>
+            </thead>
+            <tbody id="execBody">
+              <tr><td colspan="8"><div class="empty-note">加载中…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-head">
+          <h2>资金费率对比 · 每小时</h2>
+          <span class="note">与 App 版同一口径：五家永续统一折算为每小时费率 %/h（正 = 多头付空头）。Lighter 取最近一期已结算费率，Arcus 取下期预测费率 nextFundingRate（与各自前端显示一致）；最大年化差 = 五家最高与最低费率之差 × 24 × 365（单腿本金），≥ 150% 标出。Ondo Perps 列为第三方聚合 loris.tools（只有费率、无价格）。<span id="fundNextAt"></span></span>
+        </div>
+        <div class="table-card">
+          <table id="fundTable">
+            <thead>
+              <tr>
+                <th class="sym">标的</th><th>Lighter</th><th>Arcus</th><th>Nado</th>
+                <th>Variational</th><th>Ondo Perps</th><th>最大年化差</th><th>估算/小时</th><th>收钱方向</th>
+              </tr>
+            </thead>
+            <tbody id="fundBody">
+              <tr><td colspan="9"><div class="empty-note">加载中…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-head">
+          <h2>原油</h2>
+          <span class="note">Lighter 与 Arcus 的原油标的同为 USO（油价 ETF 永续），可直接比价差；Nado 的 WTI 是原油期货本身，价格口径不同，只作观察。</span>
+        </div>
+        <div class="table-card">
+          <table id="oilTable">
+            <thead>
+              <tr><th class="sym">标的</th><th>Lighter</th><th>Arcus</th><th>价差 %</th><th>Nado</th></tr>
+            </thead>
+            <tbody id="oilBody">
+              <tr><td colspan="5"><div class="empty-note">加载中…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer>
+        数据口径与 App 版看板完全一致：价格取各家标记价（Lighter 一次批量拉全部市场）；资金费率统一折算为每小时口径——Lighter 取其 fundings 接口最近一期已结算费率，Arcus 取 nextFundingRate（下期费率，与交易前端「1h Funding」一致），Nado 的 24 小时费率除以 24，Variational 的年化费率除以 8760，Ondo Perps 费率来自第三方聚合 loris.tools（8 小时口径 bps 换算，只读）。页面打开后每 60 秒自动刷新一次。
+        来源：
+        <a href="https://api.rh.lighter.xyz" target="_blank" rel="noopener">Lighter (Robinhood Chain)</a> ·
+        <a href="https://api.arcus.xyz" target="_blank" rel="noopener">Arcus</a> ·
+        <a href="https://api.prod.nado.xyz" target="_blank" rel="noopener">Nado</a> ·
+        <a href="https://omni-client-api.prod.ap-northeast-1.variational.io" target="_blank" rel="noopener">Variational</a> ·
+        <a href="https://www.coingecko.com" target="_blank" rel="noopener">CoinGecko（Ondo 现货）</a> ·
+        <a href="https://loris.tools/funding/exchange/ondo" target="_blank" rel="noopener">loris.tools（Ondo Perps 费率）</a>。
+        本页只做行情监控，不构成交易建议。
+      </footer>
+    </div>
+
+    <script>
+      "use strict";
+      /* ================================================================
+         数据口径与 App 版看板 (dex) 完全一致：
+         - Lighter 价格：一次批量 orderBookDetails 拉全部市场，取标记价；
+           买一/卖一取 orderBookOrders limit=1。
+         - Lighter 资金费率：/api/v1/fundings 近 6 小时窗口的最后一期
+           已结算费率；rate 字段本身就是 %/h（0.0004 = 0.0004%/h），
+           direction = "short" 取负。不用 /api/v1/funding（数值对不上
+           交易页面，App 版已实测排除）。
+         - Arcus：markPrice；费率用 nextFundingRate（下期预测，与前端
+           "1h Funding" 显示一致），缺失才回退 fundingRate；×100 转 %/h。
+         - Nado：funding_rate 是 24h 小数，%/h = rate / 24 × 100。
+         - Variational：funding.last.annualized_rate 是年化小数，
+           %/h = rate / 8760 × 100。
+         - Ondo Perps 费率：第三方聚合 loris.tools 公开页（其官方 API
+           对美区 IP 地理封锁），8h 口径 bps，%/h = bps / 800；只有费率
+           没有价格。页面在浏览器端直连该站，若被跨域拦截则该列为 —。
+         - 价差：|Lighter − Arcus| / 两边中间价（无符号）+ 哪边更便宜；
+           极差：同行全部有价 venue（4 家永续 + Ondo 现货）的最高−最低。
+         - 可执行价差：Lighter 买一/卖一 × Arcus 标记价（Arcus 无公开
+           盘口），扣双边 taker 费 + 滑点 0.05%，本金 $1,000（App 默认）。
+         全部费率内部统一存 %/h，最大年化差 = 五家极值差 × 24 × 365。
+         ================================================================ */
+      var SYMBOLS = ["BTC","ETH","SOL","NVDA","AAPL","MSFT","GOOGL","AMZN","META","TSLA","QQQ","SPY"];
+      var CMDTY = ["XAU","XAUT","XAG","SLV"];
+      var PAIRS = SYMBOLS.concat(["USO","SLV"]);          // 有 Lighter+Arcus 对手盘
+      var ALL = SYMBOLS.concat(CMDTY, ["USO","WTI"]);
+      var SPREAD_ALERT = 0.30;   // %
+      var FUND_ALERT = 150;      // 最大年化差 %
+      var REFRESH_MS = 60000;
+      var NOTIONAL_USD = 1000;   // App 版默认本金
+      var SLIPPAGE_PCT = 0.05;   // App 版默认滑点缓冲 %
+
+      var CG_IDS = {
+        NVDA: "nvidia-ondo-tokenized-stock", AAPL: "apple-ondo-tokenized-stock",
+        TSLA: "tesla-ondo-tokenized-stock", MSFT: "microsoft-ondo-tokenized-stock",
+        GOOGL: "alphabet-class-a-ondo-tokenized-stock", AMZN: "amazon-ondo-tokenized-stock",
+        META: "meta-platforms-ondo-tokenized-stock", SPY: "spdr-s-p-500-etf-ondo-tokenized-etf",
+        QQQ: "invesco-qqq-etf-ondo-tokenized-etf"
+      };
+      var VENUE_NAMES = { lighter: "Lighter", arcus: "Arcus", nado: "Nado", variational: "Variational", ondo_perps: "Ondo Perps" };
+
+      var state = {
+        lighterIds: null,       // {symbol: market_id}
+        lighterPx: {}, lighterBid: {}, lighterAsk: {}, lighterTaker: {},
+        arcusPx: {}, arcusTaker: {}, arcusNextAt: 0,
+        nadoPx: {}, varPx: {}, ondoPx: {},
+        lighterFr: {}, arcusFr: {}, nadoFr: {}, varFr: {}, ondoPerpsFr: {},  // 全部 %/h
+        health: {},             // venue -> true/false
+        lastOk: 0,
+        allFailed: false,
+        timer: null,
+        countdownTimer: null,
+        nextAt: 0,
+        lorisAt: 0,             // loris.tools 2 分钟缓存（与 App 版一致）
+        cgAt: 0                 // CoinGecko 60 秒缓存（免费档限频，与 App 版一致）
+      };
+
+      function $(id) { return document.getElementById(id); }
+      function isNum(x) { return typeof x === "number" && isFinite(x); }
+      function fetchJSON(url, timeoutMs) {
+        var ctrl = new AbortController();
+        var t = setTimeout(function () { ctrl.abort(); }, timeoutMs || 20000);
+        return fetch(url, { signal: ctrl.signal }).then(function (r) {
+          clearTimeout(t);
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        }).catch(function (e) { clearTimeout(t); throw e; });
+      }
+      function fetchText(url, timeoutMs) {
+        var ctrl = new AbortController();
+        var t = setTimeout(function () { ctrl.abort(); }, timeoutMs || 20000);
+        return fetch(url, { signal: ctrl.signal }).then(function (r) {
+          clearTimeout(t);
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.text();
+        }).catch(function (e) { clearTimeout(t); throw e; });
+      }
+      function fmtPrice(x) {
+        if (!isNum(x)) return "—";
+        var d = x >= 1000 ? 1 : (x >= 100 ? 2 : (x >= 1 ? 3 : 4));
+        return x.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+      }
+      function fmtPct(x, digits) { // x 已是百分数数值，带符号
+        if (!isNum(x)) return "—";
+        return (x >= 0 ? "+" : "") + x.toFixed(digits == null ? 3 : digits) + "%";
+      }
+      function fmtPctU(x, digits) { // 无符号百分数
+        if (!isNum(x)) return "—";
+        return x.toFixed(digits == null ? 3 : digits) + "%";
+      }
+      function esc(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+        });
+      }
+
+      /* ---------------- Lighter（批量详情 + 买一卖一 + 已结算费率） ---------------- */
+      function loadLighterBulk() {
+        return fetchJSON("https://api.rh.lighter.xyz/api/v1/orderBookDetails").then(function (d) {
+          var ids = {};
+          (d.order_book_details || []).forEach(function (ob) {
+            if (ALL.indexOf(ob.symbol) < 0 || ob.status !== "active") return;
+            var px = parseFloat(ob.mark_price);
+            if (isFinite(px)) state.lighterPx[ob.symbol] = px;
+            var taker = parseFloat(ob.taker_fee);
+            if (isFinite(taker)) state.lighterTaker[ob.symbol] = taker * 100; // 小数 -> %
+            var mid = parseInt(ob.market_id, 10);
+            if (isFinite(mid)) ids[ob.symbol] = mid;
+          });
+          state.lighterIds = ids;
+          return ids;
+        });
+      }
+      function lighterBooks(ids) {
+        var jobs = PAIRS.filter(function (s) { return ids[s] != null; }).map(function (sym) {
+          return fetchJSON("https://api.rh.lighter.xyz/api/v1/orderBookOrders?market_id=" + ids[sym] + "&limit=1")
+            .then(function (d) {
+              var ask = (d.asks || [])[0], bid = (d.bids || [])[0];
+              if (ask && isFinite(parseFloat(ask.price))) state.lighterAsk[sym] = parseFloat(ask.price);
+              if (bid && isFinite(parseFloat(bid.price))) state.lighterBid[sym] = parseFloat(bid.price);
+            }).catch(function () {});
+        });
+        return Promise.all(jobs);
+      }
+      function lighterFunding(ids) {
+        var now = Math.floor(Date.now() / 1000);
+        var jobs = ALL.filter(function (s) { return ids[s] != null; }).map(function (sym) {
+          // 近 6 小时窗口：start=0 时该接口会无视 count_back 返回全部历史
+          // （App 版实测 ~60KB），窗口收窄后最后一期仍是最近已结算费率。
+          var url = "https://api.rh.lighter.xyz/api/v1/fundings?market_id=" + ids[sym] +
+            "&resolution=1h&start_timestamp=" + (now - 6 * 3600) + "&end_timestamp=" + now + "&count_back=1";
+          return fetchJSON(url).then(function (d) {
+            var fs = d.fundings || [];
+            if (!fs.length) return;
+            var last = fs[fs.length - 1];
+            var rate = parseFloat(last.rate); // 本身就是 %/h，不再换算
+            if (last.direction === "short") rate = -rate;
+            if (isFinite(rate)) state.lighterFr[sym] = rate;
+          }).catch(function () {});
+        });
+        return Promise.all(jobs);
+      }
+
+      /* ---------------- Arcus ---------------- */
+      function loadArcus() {
+        return fetchJSON("https://api.arcus.xyz/v1/markets").then(function (d) {
+          var nextAt = 0;
+          (d.markets || []).forEach(function (m) {
+            var sym = String(m.marketDisplayName || "").split("-")[0];
+            if (ALL.indexOf(sym) < 0 || m.status !== "ONLINE") return;
+            var px = parseFloat(m.markPrice);
+            if (isFinite(px)) state.arcusPx[sym] = px;
+            var fr = parseFloat(m.nextFundingRate != null ? m.nextFundingRate : m.fundingRate);
+            if (isFinite(fr)) state.arcusFr[sym] = fr * 100; // 小数 -> %/h
+            var ppm = parseFloat(m.effectiveTakerFeePpm != null ? m.effectiveTakerFeePpm : m.baseTakerFeePpm);
+            if (isFinite(ppm)) state.arcusTaker[sym] = ppm / 10000; // ppm -> %
+            var na = parseFloat(m.nextFundingAt);
+            if (isFinite(na) && na > 0 && !nextAt) nextAt = na * 1000;
+          });
+          if (nextAt) state.arcusNextAt = nextAt; // 每轮刷新都更新下次结算时间
+        });
+      }
+
+      /* ---------------- Nado ---------------- */
+      function loadNado() {
+        return fetchJSON("https://api.prod.nado.xyz/archive/v2/contracts").then(function (d) {
+          Object.keys(d).forEach(function (ticker) {
+            if (ticker.slice(-11) !== "-PERP_USDT0") return;
+            var sym = ticker.slice(0, -11);
+            var c = d[ticker];
+            if (ALL.indexOf(sym) >= 0) {
+              var px = parseFloat(c.mark_price);
+              if (isFinite(px)) state.nadoPx[sym] = px;
+              var fr = parseFloat(c.funding_rate);
+              if (isFinite(fr)) state.nadoFr[sym] = fr / 24 * 100; // 24h 小数 -> %/h
+            }
+          });
+        });
+      }
+
+      /* ---------------- Variational ---------------- */
+      function loadVariational() {
+        return fetchJSON("https://omni-client-api.prod.ap-northeast-1.variational.io/metadata/v2/stats").then(function (d) {
+          (d.listings || []).forEach(function (m) {
+            var t = String(m.ticker || "");
+            if (t.slice(-5) !== "-PERP") return;
+            var sym = t.slice(0, -5);
+            if (ALL.indexOf(sym) < 0) return;
+            var px = parseFloat(m.mark_price);
+            if (isFinite(px)) state.varPx[sym] = px;
+            var f = (m.funding || {}).last || {};
+            var ann = parseFloat(f.annualized_rate);
+            if (isFinite(ann)) state.varFr[sym] = ann / 8760 * 100; // 年化小数 -> %/h
+          });
+        });
+      }
+
+      /* ---------------- Ondo 现货 (CoinGecko，60 秒缓存) ---------------- */
+      function loadOndo() {
+        if (state.cgAt && Date.now() - state.cgAt < 60000 && Object.keys(state.ondoPx).length) {
+          return Promise.resolve();
+        }
+        var ids = Object.keys(CG_IDS).map(function (k) { return CG_IDS[k]; }).join(",");
+        var url = "https://api.coingecko.com/api/v3/simple/price?ids=" + ids +
+          "&vs_currencies=usd&precision=4";
+        return fetchJSON(url).then(function (d) {
+          Object.keys(CG_IDS).forEach(function (sym) {
+            var e = d[CG_IDS[sym]];
+            if (e && isFinite(parseFloat(e.usd))) state.ondoPx[sym] = parseFloat(e.usd);
+          });
+          state.cgAt = Date.now();
+        });
+      }
+
+      /* ---------------- Ondo Perps 费率 (loris.tools，2 分钟缓存) ---------------- */
+      function stripTags(html) {
+        return html.replace(/<[^>]*>/g, " ")
+          .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+          .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+          .replace(/\s+/g, " ").trim();
+      }
+      function loadOndoPerps() {
+        if (state.lorisAt && Date.now() - state.lorisAt < 120000) return Promise.resolve();
+        return fetchText("https://loris.tools/funding/exchange/ondo", 25000).then(function (html) {
+          var out = {}, rows = 0, m;
+          var rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+          while ((m = rowRe.exec(html)) !== null) {
+            var rowHtml = m[1];
+            var sm = rowHtml.match(/uppercase[^"]*">\s*([A-Za-z0-9._-]+)\s*</);
+            if (!sm) continue;
+            var cells = rowHtml.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/gi) || [];
+            if (cells.length < 3) continue;
+            var bps = parseFloat(stripTags(cells[2])); // 第 3 格：8h 口径 bps
+            if (!isFinite(bps)) continue;
+            out[sm[1].toUpperCase()] = bps / 800; // bps/8h -> %/h
+            rows++;
+          }
+          if (!rows) throw new Error("loris: no rows");
+          state.ondoPerpsFr = out;
+          state.lorisAt = Date.now();
+        });
+      }
+
+      /* ---------------- 派生口径（与 App 版一致） ---------------- */
+      function pairSpread(l, a) { // |L−A| / 中间价，无符号
+        if (!isNum(l) || !isNum(a)) return null;
+        var mid = (l + a) / 2;
+        if (mid <= 0) return null;
+        return {
+          pct: Math.abs(l - a) / mid * 100,
+          abs: Math.abs(l - a),
+          cheaper: l < a ? "lighter" : (a < l ? "arcus" : null)
+        };
+      }
+      function rangePctOf(prices) { // 多家极差（% of 极值中间价）
+        var ps = prices.filter(isNum);
+        if (ps.length < 2) return null;
+        var hi = Math.max.apply(null, ps), lo = Math.min.apply(null, ps);
+        var mid = (hi + lo) / 2;
+        if (mid <= 0) return null;
+        return (hi - lo) / mid * 100;
+      }
+      function execSpread(sym) { // Lighter 买一/卖一 × Arcus 标记价，扣双边 taker 费 + 滑点
+        var lPx = state.lighterPx[sym], aPx = state.arcusPx[sym];
+        if (!isNum(lPx) || !isNum(aPx)) return null;
+        var lBuy = isNum(state.lighterAsk[sym]) ? state.lighterAsk[sym] : lPx;
+        var lSell = isNum(state.lighterBid[sym]) ? state.lighterBid[sym] : lPx;
+        var fee = (state.lighterTaker[sym] || 0) + (state.arcusTaker[sym] || 0);
+        var dirA = { dir: "buy_lighter_sell_arcus", buy: lBuy, sell: aPx, gross: lBuy > 0 ? (aPx - lBuy) / lBuy * 100 : 0 };
+        var dirB = { dir: "buy_arcus_sell_lighter", buy: aPx, sell: lSell, gross: aPx > 0 ? (lSell - aPx) / aPx * 100 : 0 };
+        var best = dirA.gross >= dirB.gross ? dirA : dirB;
+        best.fee = fee;
+        best.net = best.gross - fee - SLIPPAGE_PCT;
+        best.est = best.net / 100 * NOTIONAL_USD;
+        return best;
+      }
+      function fundingMax(sym) { // 五家极值对：空最高、多最低
+        var venues = [["lighter", state.lighterFr[sym]], ["arcus", state.arcusFr[sym]],
+          ["nado", state.nadoFr[sym]], ["variational", state.varFr[sym]],
+          ["ondo_perps", state.ondoPerpsFr[sym]]].filter(function (v) { return isNum(v[1]); });
+        if (venues.length < 2) return null;
+        var hi = venues[0], lo = venues[0];
+        venues.forEach(function (v) { if (v[1] > hi[1]) hi = v; if (v[1] < lo[1]) lo = v; });
+        var diff = hi[1] - lo[1];
+        return {
+          diffPct: diff,
+          ann: diff * 24 * 365,
+          hourlyEst: diff / 100 * NOTIONAL_USD,
+          shortVenue: diff > 0 ? hi[0] : null,
+          longVenue: diff > 0 ? lo[0] : null
+        };
+      }
+      function pairText(fm) {
+        if (!fm || !fm.shortVenue) return "费率差为零";
+        return "空 " + VENUE_NAMES[fm.shortVenue] + " · 多 " + VENUE_NAMES[fm.longVenue] + " 收差";
+      }
+
+      /* ---------------- 渲染 ---------------- */
+      function cell(v, th) { return '<td class="num" data-th="' + th + '">' + v + "</td>"; }
+      function dimCell(v, th) { return '<td class="num dim" data-th="' + th + '">' + v + "</td>"; }
+      function rateCell(v, th) { // %/h，4 位小数
+        if (!isNum(v)) return dimCell("—", th);
+        return '<td class="num ' + (v > 0 ? "pos" : v < 0 ? "neg" : "") + '" data-th="' + th + '">' + fmtPct(v, 4) + "</td>";
+      }
+      function priceRow(sym, label) {
+        var l = state.lighterPx[sym], a = state.arcusPx[sym];
+        var sp = pairSpread(l, a);
+        var rg = rangePctOf([l, a, state.nadoPx[sym], state.varPx[sym], state.ondoPx[sym]]);
+        var alert = sp != null && sp.pct >= SPREAD_ALERT;
+        var hint = sp && sp.cheaper ? '<span class="cheap-hint">' + (sp.cheaper === "lighter" ? "Lighter 更便宜" : "Arcus 更便宜") + "</span>" : "";
+        return '<tr' + (alert ? ' class="row-alert"' : "") + '>' +
+          '<td class="sym" data-th="">' + esc(label || sym) + hint + (alert ? '<span class="badge spread">价差超阈值</span>' : "") + "</td>" +
+          cell(fmtPrice(l), "Lighter") + cell(fmtPrice(a), "Arcus") +
+          cell(sp ? fmtPctU(sp.pct) : "—", "价差 %") +
+          dimCell(rg != null ? fmtPctU(rg) : "—", "极差 %") +
+          dimCell(fmtPrice(state.nadoPx[sym]), "Nado") +
+          dimCell(fmtPrice(state.varPx[sym]), "Variational") +
+          dimCell(fmtPrice(state.ondoPx[sym]), "Ondo 现货") +
+          "</tr>";
+      }
+
+      function renderOverview() {
+        var maxSpread = null, maxSym = "";
+        SYMBOLS.concat(["USO"]).forEach(function (s) {
+          var sp = pairSpread(state.lighterPx[s], state.arcusPx[s]);
+          if (sp && (maxSpread === null || sp.pct > maxSpread.pct)) { maxSpread = sp; maxSym = s; }
+        });
+        var maxFund = null, maxFundSym = "";
+        ALL.forEach(function (s) {
+          var fm = fundingMax(s);
+          if (fm && (maxFund === null || fm.ann > maxFund.ann)) { maxFund = fm; maxFundSym = s; }
+        });
+        var spreadAlerts = PAIRS.filter(function (s) {
+          var sp = pairSpread(state.lighterPx[s], state.arcusPx[s]);
+          return sp && sp.pct >= SPREAD_ALERT;
+        }).length;
+        var fundAlerts = ALL.filter(function (s) {
+          var fm = fundingMax(s);
+          return fm && fm.ann >= FUND_ALERT;
+        }).length;
+
+        var html = "";
+        html += '<div class="ov-card"><div class="k">最大价差（Lighter vs Arcus）</div>' +
+          '<div class="v">' + (maxSpread ? fmtPctU(maxSpread.pct) : "—") + "</div>" +
+          '<div class="sub">' + (maxSym ? esc(maxSym) + " · 差 $" + fmtPrice(maxSpread.abs) + " · " +
+            (maxSpread.cheaper === "lighter" ? "Lighter 更便宜" : maxSpread.cheaper === "arcus" ? "Arcus 更便宜" : "两边同价") +
+            " · 阈值 0.30%" : "暂无数据") + "</div></div>";
+        html += '<div class="ov-card"><div class="k">最大资金费率差（年化 · 五家极值）</div>' +
+          '<div class="v">' + (maxFund ? fmtPctU(maxFund.ann, 1) : "—") + "</div>" +
+          '<div class="sub">' + (maxFundSym ? esc(maxFundSym) + " · " + pairText(maxFund) + " · 阈值 150%" : "暂无数据") + "</div></div>";
+        html += '<div class="ov-card"><div class="k">超阈值提醒</div>' +
+          '<div class="v">' + (spreadAlerts + fundAlerts) + ' <small>项</small></div>' +
+          '<div class="sub">价差 ' + spreadAlerts + " 项 · 费率差 " + fundAlerts + " 项</div></div>";
+        html += '<div class="ov-card"><div class="k">BTC 标记价</div>' +
+          '<div class="v">' + fmtPrice(state.lighterPx.BTC) + "</div>" +
+          '<div class="sub">Lighter $' + fmtPrice(state.lighterPx.BTC) + " · Arcus $" + fmtPrice(state.arcusPx.BTC) + "</div></div>";
+        $("overview").innerHTML = html;
+      }
+
+      function renderSpread() {
+        $("spreadBody").innerHTML = SYMBOLS.map(function (s) { return priceRow(s); }).join("");
+        $("cmdtyBody").innerHTML = CMDTY.map(function (s) { return priceRow(s); }).join("");
+      }
+
+      function renderExec() {
+        var rows = PAIRS.map(function (s) {
+          var ex = execSpread(s);
+          if (!ex) {
+            return "<tr>" + '<td class="sym" data-th="">' + esc(s) + "</td>" +
+              '<td class="dir" data-th="方向">—（缺 Lighter 或 Arcus 价格）</td>' +
+              dimCell("—", "买价") + dimCell("—", "卖价") + dimCell("—", "毛 %") +
+              dimCell("—", "手续费 %") + dimCell("—", "净 %") + dimCell("—", "估算收益") + "</tr>";
+          }
+          var hot = ex.net >= SPREAD_ALERT;
+          return '<tr' + (hot ? ' class="row-alert"' : "") + '>' +
+            '<td class="sym" data-th="">' + esc(s) + (hot ? '<span class="badge spread">净价差超阈值</span>' : "") + "</td>" +
+            '<td class="dir" data-th="方向">' + (ex.dir === "buy_lighter_sell_arcus" ? "Lighter 买入 → Arcus 卖出" : "Arcus 买入 → Lighter 卖出") + "</td>" +
+            cell(fmtPrice(ex.buy), "买价") + cell(fmtPrice(ex.sell), "卖价") +
+            cell(fmtPct(ex.gross), "毛 %") + dimCell(fmtPctU(ex.fee), "手续费 %") +
+            '<td class="num ' + (ex.net > 0 ? "pos" : "neg") + '" data-th="净 %">' + fmtPct(ex.net) + "</td>" +
+            '<td class="num" data-th="估算收益">' + (ex.est >= 0 ? "+$" : "-$") + Math.abs(ex.est).toFixed(2) + "</td>" +
+            "</tr>";
+        });
+        $("execBody").innerHTML = rows.join("");
+      }
+
+      function renderFunding() {
+        var syms = ALL.filter(function (s) { return fundingMax(s); });
+        syms.sort(function (x, y) { return fundingMax(y).ann - fundingMax(x).ann; });
+        if (!syms.length) {
+          $("fundBody").innerHTML = '<tr><td colspan="9"><div class="empty-note">暂无费率数据</div></td></tr>';
+          return;
+        }
+        $("fundBody").innerHTML = syms.map(function (s) {
+          var fm = fundingMax(s);
+          var alert = fm.ann >= FUND_ALERT;
+          return '<tr' + (alert ? ' class="row-alert"' : "") + '>' +
+            '<td class="sym" data-th="">' + esc(s) + (alert ? '<span class="badge fund">费率差超阈值</span>' : "") + "</td>" +
+            rateCell(state.lighterFr[s], "Lighter") +
+            rateCell(state.arcusFr[s], "Arcus") +
+            rateCell(state.nadoFr[s], "Nado") +
+            rateCell(state.varFr[s], "Variational") +
+            rateCell(state.ondoPerpsFr[s], "Ondo Perps") +
+            '<td class="num" data-th="最大年化差"><b>' + fmtPctU(fm.ann, 1) + "</b></td>" +
+            dimCell("+$" + fm.hourlyEst.toFixed(2) + " / $1,000", "估算/小时") +
+            '<td class="dir" data-th="收钱方向">' + pairText(fm) + "</td>" +
+            "</tr>";
+        }).join("");
+      }
+
+      function renderOil() {
+        var l = state.lighterPx.USO, a = state.arcusPx.USO;
+        var sp = pairSpread(l, a);
+        var alert = sp != null && sp.pct >= SPREAD_ALERT;
+        var hint = sp && sp.cheaper ? '<span class="cheap-hint">' + (sp.cheaper === "lighter" ? "Lighter 更便宜" : "Arcus 更便宜") + "</span>" : "";
+        $("oilBody").innerHTML =
+          '<tr' + (alert ? ' class="row-alert"' : "") + '>' +
+          '<td class="sym" data-th="">USO（原油 ETF）' + hint + "</td>" +
+          cell(fmtPrice(l), "Lighter") + cell(fmtPrice(a), "Arcus") +
+          cell(sp ? fmtPctU(sp.pct) : "—", "价差 %") +
+          dimCell("—", "Nado") + "</tr>" +
+          "<tr>" +
+          '<td class="sym" data-th="">WTI（原油期货）</td>' +
+          dimCell("—", "Lighter") + dimCell("—", "Arcus") + dimCell("—", "价差 %") +
+          cell(fmtPrice(state.nadoPx.WTI), "Nado") + "</tr>";
+      }
+
+      function renderHealth() {
+        var names = [["lighter", "Lighter"], ["arcus", "Arcus"], ["nado", "Nado"], ["variational", "Variational"], ["ondo", "Ondo"], ["ondoPerps", "Ondo Perps"]];
+        $("venueHealth").innerHTML = names.map(function (n) {
+          var ok = state.health[n[0]];
+          return '<span class="vchip ' + (ok === true ? "ok" : ok === false ? "bad" : "") + '">' +
+            n[1] + (ok === true ? " ✓" : ok === false ? " ✗ 拉取失败" : " …") + "</span>";
+        }).join("");
+      }
+
+      function renderStatus() {
+        var dot = $("liveDot"), txt = $("statusText");
+        var na = $("fundNextAt");
+        if (na) {
+          if (state.arcusNextAt > Date.now()) {
+            var nd = new Date(state.arcusNextAt);
+            var nh = String(nd.getHours()).padStart(2, "0"), nm = String(nd.getMinutes()).padStart(2, "0"), ns = String(nd.getSeconds()).padStart(2, "0");
+            var remainS = Math.max(0, Math.round((state.arcusNextAt - Date.now()) / 1000));
+            na.textContent = "Arcus 下次结算 " + nh + ":" + nm + ":" + ns + "（" + Math.floor(remainS / 60) + " 分 " + String(remainS % 60).padStart(2, "0") + " 秒后）。";
+          } else {
+            na.textContent = "";
+          }
+        }
+        if (!state.lastOk) {
+          if (state.allFailed) {
+            dot.className = "live-dot stale";
+            var remain0 = Math.max(0, Math.round((state.nextAt - Date.now()) / 1000));
+            txt.innerHTML = "行情拉取失败（网络或交易所接口异常），" + (remain0 > 0 ? "<b>" + remain0 + "s</b> 后自动重试" : "正在重试…");
+          } else {
+            dot.className = "live-dot loading";
+            txt.textContent = "正在拉取 6 家数据源行情…";
+          }
+          return;
+        }
+        var age = Math.floor((Date.now() - state.lastOk) / 1000);
+        var remain = Math.max(0, Math.round((state.nextAt - Date.now()) / 1000));
+        dot.className = "live-dot" + (age > 150 || state.allFailed ? " stale" : "");
+        var d = new Date(state.lastOk);
+        var hh = String(d.getHours()).padStart(2, "0"), mm = String(d.getMinutes()).padStart(2, "0"), ss = String(d.getSeconds()).padStart(2, "0");
+        txt.innerHTML = "更新于 <b>" + hh + ":" + mm + ":" + ss + "</b> · 每 60 秒自动刷新" +
+          (remain > 0 ? " · 下次 <b>" + remain + "s</b>" : " · 刷新中…");
+      }
+
+      function renderAll() { renderOverview(); renderSpread(); renderExec(); renderFunding(); renderOil(); renderHealth(); renderStatus(); }
+
+      /* ---------------- 主循环 ---------------- */
+      var refreshing = false;
+      function refresh() {
+        if (refreshing) return Promise.resolve();
+        refreshing = true;
+        $("refreshBtn").disabled = true;
+        // 渐进渲染：每家数据一到就先画出来，不等全部 6 家拉完才首屏
+        // （慢源/被跨域拦截的源不再拖住整页停留在「正在拉取」）。
+        var lighterJob = loadLighterBulk().then(function (ids) {
+          state.health.lighter = Object.keys(state.lighterPx).length > 0;
+          renderAll();
+          return Promise.all([lighterBooks(ids), lighterFunding(ids)]).then(function () {
+            state.health.lighter = Object.keys(state.lighterPx).length > 0;
+            renderAll();
+          });
+        }).catch(function () { state.health.lighter = false; renderAll(); });
+        var arcusJob = loadArcus().then(function () { state.health.arcus = true; })
+          .catch(function () { state.health.arcus = false; })
+          .then(function () { renderAll(); });
+        var nadoJob = loadNado().then(function () { state.health.nado = true; })
+          .catch(function () { state.health.nado = false; })
+          .then(function () { renderAll(); });
+        var varJob = loadVariational().then(function () { state.health.variational = true; })
+          .catch(function () { state.health.variational = false; })
+          .then(function () { renderAll(); });
+        var ondoJob = loadOndo().then(function () { state.health.ondo = true; })
+          .catch(function () { state.health.ondo = false; })
+          .then(function () { renderAll(); });
+        var ondoPerpsJob = loadOndoPerps().then(function () { state.health.ondoPerps = true; })
+          .catch(function () { state.health.ondoPerps = false; })
+          .then(function () { renderAll(); });
+
+        return Promise.all([lighterJob, arcusJob, nadoJob, varJob, ondoJob, ondoPerpsJob]).then(function () {
+          var anyOk = state.health.lighter || state.health.arcus || state.health.nado ||
+            state.health.variational || state.health.ondo;
+          state.allFailed = !anyOk;
+          if (anyOk) state.lastOk = Date.now();
+          state.nextAt = Date.now() + REFRESH_MS;
+          refreshing = false;
+          $("refreshBtn").disabled = false;
+          renderAll();
+        });
+      }
+
+      function startLoops() {
+        if (state.timer) clearInterval(state.timer);
+        if (state.countdownTimer) clearInterval(state.countdownTimer);
+        state.timer = setInterval(refresh, REFRESH_MS);
+        state.countdownTimer = setInterval(renderStatus, 1000);
+      }
+
+      $("refreshBtn").addEventListener("click", function () {
+        refresh().then(startLoops);
+      });
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden && state.lastOk && Date.now() - state.lastOk > REFRESH_MS) {
+          refresh().then(startLoops);
+        }
+      });
+
+      refresh().then(startLoops);
+      renderAll();
+    </script>
+  </body>
+</html>
