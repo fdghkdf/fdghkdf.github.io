@@ -233,7 +233,7 @@
       <section>
         <div class="sec-head">
           <h2>资金费率对比 · 每小时</h2>
-          <span class="note">与 App 版同一口径：五家永续统一折算为每小时费率 %/h（正 = 多头付空头）。Lighter 取最近一期已结算费率，Arcus 取下期预测费率 nextFundingRate（与各自前端显示一致）；最大年化差 = 五家最高与最低费率之差 × 24 × 365（单腿本金），≥ 150% 标出。Ondo Perps 列为第三方聚合 loris.tools（只有费率、无价格）。<span id="fundNextAt"></span></span>
+          <span class="note">与 App 版同一口径：五家永续统一折算为每小时费率 %/h（正 = 多头付空头）。Lighter 取实时费率 current_funding_rate，Arcus 取下期预测费率 nextFundingRate（与各自前端显示一致）；最大年化差 = 五家最高与最低费率之差 × 24 × 365（单腿本金），≥ 150% 标出。Ondo Perps 列为第三方聚合 loris.tools（只有费率、无价格）。<span id="fundNextAt"></span></span>
         </div>
         <div class="table-card">
           <table id="fundTable">
@@ -268,7 +268,7 @@
       </section>
 
       <footer>
-        数据口径与 App 版看板完全一致：价格取各家标记价（Lighter 一次批量拉全部市场）；资金费率统一折算为每小时口径——Lighter 取其 fundings 接口最近一期已结算费率，Arcus 取 nextFundingRate（下期费率，与交易前端「1h Funding」一致），Nado 的 24 小时费率除以 24，Variational 的年化费率除以 8760，Ondo Perps 费率来自第三方聚合 loris.tools（8 小时口径 bps 换算，只读）。页面打开后每 60 秒自动刷新一次。
+        数据口径与 App 版看板完全一致：价格取各家标记价（Lighter 一次批量拉全部市场）；资金费率统一折算为每小时口径——Lighter 取其实时费率 current_funding_rate（WebSocket market_stats，与交易页面头栏一致），Arcus 取 nextFundingRate（下期费率，与交易前端「1h Funding」一致），Nado 的 24 小时费率除以 24，Variational 的年化费率除以 8760，Ondo Perps 费率来自第三方聚合 loris.tools（8 小时口径 bps 换算，只读）。页面打开后每 60 秒自动刷新一次。
         来源：
         <a href="https://api.rh.lighter.xyz" target="_blank" rel="noopener">Lighter (Robinhood Chain)</a> ·
         <a href="https://api.arcus.xyz" target="_blank" rel="noopener">Arcus</a> ·
@@ -286,10 +286,12 @@
          数据口径与 App 版看板 (dex) 完全一致：
          - Lighter 价格：一次批量 orderBookDetails 拉全部市场，取标记价；
            买一/卖一取 orderBookOrders limit=1。
-         - Lighter 资金费率：/api/v1/fundings 近 6 小时窗口的最后一期
-           已结算费率；rate 字段本身就是 %/h（0.0004 = 0.0004%/h），
-           direction = "short" 取负。不用 /api/v1/funding（数值对不上
-           交易页面，App 版已实测排除）。
+         - Lighter 资金费率：WebSocket market_stats 频道的
+           current_funding_rate（当前小时实时费率，%/h，本身带符号），
+           与交易页面头栏显示完全一致。不用 /api/v1/fundings 的已结算
+           费率 funding_rate：两者可差出符号（2026-10-21 SLV 实测
+           current +0.0006%/h vs 已结算 -0.0144%/h，曾导致看板整行
+           年化差被放大成假的 130%）；也不用 /api/v1/funding。
          - Arcus：markPrice；费率用 nextFundingRate（下期预测，与前端
            "1h Funding" 显示一致），缺失才回退 fundingRate；×100 转 %/h。
          - Nado：funding_rate 是 24h 小数，%/h = rate / 24 × 100。
@@ -407,22 +409,52 @@
         return Promise.all(jobs);
       }
       function lighterFunding(ids) {
-        var now = Math.floor(Date.now() / 1000);
-        var jobs = ALL.filter(function (s) { return ids[s] != null; }).map(function (sym) {
-          // 近 6 小时窗口：start=0 时该接口会无视 count_back 返回全部历史
-          // （App 版实测 ~60KB），窗口收窄后最后一期仍是最近已结算费率。
-          var url = "https://api.rh.lighter.xyz/api/v1/fundings?market_id=" + ids[sym] +
-            "&resolution=1h&start_timestamp=" + (now - 6 * 3600) + "&end_timestamp=" + now + "&count_back=1";
-          return fetchJSON(url).then(function (d) {
-            var fs = d.fundings || [];
-            if (!fs.length) return;
-            var last = fs[fs.length - 1];
-            var rate = parseFloat(last.rate); // 本身就是 %/h，不再换算
-            if (last.direction === "short") rate = -rate;
-            if (isFinite(rate)) state.lighterFr[sym] = rate;
-          }).catch(function () {});
+        // Lighter 交易页面头栏显示的是 WebSocket market_stats 频道的
+        // current_funding_rate（当前小时的实时费率，%/h，本身带符号），
+        // 不是 /api/v1/fundings 的上一期已结算费率 funding_rate——两者
+        // 可以差出符号：2026-10-21 SLV 实测 current +0.0006%/h，而已结算
+        // 为 -0.0144%/h，看板此前用已结算值导致整行年化差被放大到假
+        // 的 130%。开一条 WS、订阅全部标的、收齐第一条后即关闭；失败
+        // 时保留上一轮的值（首轮失败该列显示 —），绝不回退到已结算
+        // 口径冒充页面值。
+        var syms = ALL.filter(function (s) { return ids[s] != null; });
+        if (!syms.length || typeof WebSocket === "undefined") return Promise.resolve();
+        return new Promise(function (resolve) {
+          var remaining = {}, left = 0, settled = false, ws = null;
+          syms.forEach(function (s) { remaining[s] = true; left++; });
+          function finish() {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            try { if (ws) ws.close(); } catch (e) {}
+            resolve();
+          }
+          var timer = setTimeout(finish, 12000);
+          try {
+            ws = new WebSocket("wss://api.rh.lighter.xyz/stream?readonly=true");
+          } catch (e) { finish(); return; }
+          ws.onopen = function () {
+            syms.forEach(function (sym) {
+              try {
+                ws.send(JSON.stringify({ type: "subscribe", channel: "market_stats/" + ids[sym] }));
+              } catch (e) {}
+            });
+          };
+          ws.onmessage = function (ev) {
+            try {
+              var d = JSON.parse(ev.data);
+              var ms = d && d.market_stats;
+              if (!ms || !remaining[ms.symbol]) return;
+              var rate = parseFloat(ms.current_funding_rate); // %/h，带符号
+              if (!isFinite(rate)) return;
+              state.lighterFr[ms.symbol] = rate;
+              delete remaining[ms.symbol];
+              if (--left <= 0) finish();
+            } catch (e) {}
+          };
+          ws.onerror = function () { finish(); };
+          ws.onclose = function () { finish(); };
         });
-        return Promise.all(jobs);
       }
 
       /* ---------------- Arcus ---------------- */
