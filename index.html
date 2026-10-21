@@ -343,23 +343,48 @@
 
       function $(id) { return document.getElementById(id); }
       function isNum(x) { return typeof x === "number" && isFinite(x); }
+      var _inflight = {};
+      function fetchRaw(url, timeoutMs, kind) {
+        var key = kind + ":" + url;
+        if (_inflight[key]) return _inflight[key];
+        var waits = [0, 800, 2000, 4500]; // 首发 + 3 次重试退避（429/5xx/网络抖动）
+        function once(wait) {
+          return new Promise(function (res) { setTimeout(res, wait); }).then(function () {
+            var ctrl = new AbortController();
+            var t = setTimeout(function () { ctrl.abort(); }, timeoutMs || 20000);
+            return fetch(url, { signal: ctrl.signal }).then(function (r) {
+              clearTimeout(t);
+              if (r.status === 429 || r.status >= 500) {
+                var ra = parseInt(r.headers.get("Retry-After") || "0", 10);
+                var err = new Error("HTTP " + r.status);
+                err.retryable = true;
+                err.retryAfterMs = isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 10000) : 0;
+                throw err;
+              }
+              if (!r.ok) throw new Error("HTTP " + r.status);
+              return r;
+            }).catch(function (e) { clearTimeout(t); throw e; });
+          });
+        }
+        function loop(i) {
+          return once(waits[i]).catch(function (e) {
+            var retryable = e && (e.retryable || e.name === "AbortError" || e instanceof TypeError);
+            if (!retryable || i >= waits.length - 1) throw e;
+            if (e.retryAfterMs) waits[i + 1] = e.retryAfterMs;
+            return loop(i + 1);
+          });
+        }
+        var p = loop(0);
+        _inflight[key] = p;
+        var done = function () { if (_inflight[key] === p) delete _inflight[key]; };
+        p.then(done, done);
+        return p;
+      }
       function fetchJSON(url, timeoutMs) {
-        var ctrl = new AbortController();
-        var t = setTimeout(function () { ctrl.abort(); }, timeoutMs || 20000);
-        return fetch(url, { signal: ctrl.signal }).then(function (r) {
-          clearTimeout(t);
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.json();
-        }).catch(function (e) { clearTimeout(t); throw e; });
+        return fetchRaw(url, timeoutMs, "J").then(function (r) { return r.json(); });
       }
       function fetchText(url, timeoutMs) {
-        var ctrl = new AbortController();
-        var t = setTimeout(function () { ctrl.abort(); }, timeoutMs || 20000);
-        return fetch(url, { signal: ctrl.signal }).then(function (r) {
-          clearTimeout(t);
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.text();
-        }).catch(function (e) { clearTimeout(t); throw e; });
+        return fetchRaw(url, timeoutMs, "T").then(function (r) { return r.text(); });
       }
       function fmtPrice(x) {
         if (!isNum(x)) return "—";
