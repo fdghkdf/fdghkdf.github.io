@@ -344,9 +344,8 @@
       function $(id) { return document.getElementById(id); }
       function isNum(x) { return typeof x === "number" && isFinite(x); }
       var _inflight = {};
-      function fetchRaw(url, timeoutMs, kind) {
-        var key = kind + ":" + url;
-        if (_inflight[key]) return _inflight[key];
+      function fetchBodyText(url, timeoutMs) { // 返回响应文本：重试 + 同址并发合并（合并的是文本，可被多个调用方各自解析）
+        if (_inflight[url]) return _inflight[url];
         var waits = [0, 800, 2000, 4500]; // 首发 + 3 次重试退避（429/5xx/网络抖动）
         function once(wait) {
           return new Promise(function (res) { setTimeout(res, wait); }).then(function () {
@@ -362,7 +361,7 @@
                 throw err;
               }
               if (!r.ok) throw new Error("HTTP " + r.status);
-              return r;
+              return r.text();
             }).catch(function (e) { clearTimeout(t); throw e; });
           });
         }
@@ -375,16 +374,16 @@
           });
         }
         var p = loop(0);
-        _inflight[key] = p;
-        var done = function () { if (_inflight[key] === p) delete _inflight[key]; };
+        _inflight[url] = p;
+        var done = function () { if (_inflight[url] === p) delete _inflight[url]; };
         p.then(done, done);
         return p;
       }
       function fetchJSON(url, timeoutMs) {
-        return fetchRaw(url, timeoutMs, "J").then(function (r) { return r.json(); });
+        return fetchBodyText(url, timeoutMs).then(function (t) { return JSON.parse(t); });
       }
       function fetchText(url, timeoutMs) {
-        return fetchRaw(url, timeoutMs, "T").then(function (r) { return r.text(); });
+        return fetchBodyText(url, timeoutMs);
       }
       function fmtPrice(x) {
         if (!isNum(x)) return "—";
