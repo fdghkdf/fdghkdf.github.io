@@ -268,7 +268,7 @@
       </section>
 
       <footer>
-        数据口径与 App 版看板完全一致：价格取各家标记价（Lighter 一次批量拉全部市场）；资金费率统一折算为每小时口径——Lighter 取其实时费率 current_funding_rate（WebSocket market_stats，与交易页面头栏一致），Arcus 取 nextFundingRate（下期费率，与交易前端「1h Funding」一致），Nado 的 24 小时费率除以 24，Variational 的年化费率除以 8760，Ondo Perps 费率来自第三方聚合 loris.tools（8 小时口径 bps 换算，只读）。页面打开后每 60 秒自动刷新一次。
+        数据口径与 App 版看板完全一致：价格取各家标记价（Lighter 一次批量拉全部市场）；资金费率统一折算为每小时口径——Lighter 取其实时费率 current_funding_rate（WebSocket market_stats，与交易页面头栏一致），Arcus 取 nextFundingRate（下期费率，与交易前端「1h Funding」一致），Nado 的 24 小时费率除以 24，Variational 的年化费率除以 8760，Ondo Perps 费率来自第三方聚合 loris.tools（8 小时口径 bps 换算，只读）。页面打开后每 60 秒自动刷新一次。直连失败时页面会改读同站快照 data.json（GitHub Actions 每 15 分钟在跑手上抓取，状态条会明标快照的抓取时间与延迟，快照不是实时行情）。
         来源：
         <a href="https://api.rh.lighter.xyz" target="_blank" rel="noopener">Lighter (Robinhood Chain)</a> ·
         <a href="https://api.arcus.xyz" target="_blank" rel="noopener">Arcus</a> ·
@@ -338,7 +338,10 @@
         countdownTimer: null,
         nextAt: 0,
         lorisAt: 0,             // loris.tools 2 分钟缓存（与 App 版一致）
-        cgAt: 0                 // CoinGecko 60 秒缓存（免费档限频，与 App 版一致）
+        cgAt: 0,                // CoinGecko 60 秒缓存（免费档限频，与 App 版一致）
+        snapshotAt: 0,          // 同站 data.json 的抓取时间（毫秒）
+        snapshotData: null,     // 同站 data.json 的原始内容
+        usingSnapshot: false    // 是否有任何一家正在用快照数据兜底
       };
 
       function $(id) { return document.getElementById(id); }
@@ -805,15 +808,105 @@
         var hh = String(d.getHours()).padStart(2, "0"), mm = String(d.getMinutes()).padStart(2, "0"), ss = String(d.getSeconds()).padStart(2, "0");
         txt.innerHTML = "更新于 <b>" + hh + ":" + mm + ":" + ss + "</b> · 每 60 秒自动刷新" +
           (remain > 0 ? " · 下次 <b>" + remain + "s</b>" : " · 刷新中…");
+        if (state.usingSnapshot && state.snapshotAt) {
+          var sd = new Date(state.snapshotAt);
+          var sh = String(sd.getHours()).padStart(2, "0"), sm2 = String(sd.getMinutes()).padStart(2, "0");
+          var ageMin = Math.max(0, Math.round((Date.now() - state.snapshotAt) / 60000));
+          txt.innerHTML += " · 部分为快照（抓取于 " + sh + ":" + sm2 + "，约 " + ageMin + " 分钟前，直连失败时备用，非实时）";
+        }
       }
 
       function renderAll() { renderOverview(); renderSpread(); renderExec(); renderFunding(); renderOil(); renderHealth(); renderStatus(); }
+
+      /* ---------------- 同站快照兜底（data.json） ----------------
+         data.json 由 GitHub Actions 每 15 分钟在跑手上抓取并提交到仓库，
+         页面读的是自己站内的文件，不再直连 6 家接口。适用两种情况：
+         (1) 用户浏览器到 6 家接口的路全不通（截图里 6 家全红就是这种情况，
+             云端直连当时只有 Ondo Perps 一家失败）；
+         (2) loris.tools 不给浏览器跨域许可，Ondo Perps 列直连注定失败。
+         快照不是实时行情：抓取时间会明标在状态条里，绝不冒充直连实时值。
+         费率口径与直连完全一致（Lighter 实时 current_funding_rate、
+         Arcus nextFundingRate，其余同前），只是抓取时刻早 0-15 分钟。 */
+      function copyMap(target, src, onlyMissing) {
+        if (!src) return false;
+        var filled = false;
+        Object.keys(src).forEach(function (k) {
+          var v = parseFloat(src[k]);
+          if (!isFinite(v)) return;
+          if (onlyMissing && isNum(target[k])) return;
+          target[k] = v;
+          filled = true;
+        });
+        return filled;
+      }
+      function applySnapshot(d, onlyMissing) {
+        if (!d || !d.prices) return false;
+        var any = false;
+        var px = d.prices, fr = d.funding_pct_h || {}, tk = d.taker_pct || {};
+        if (copyMap(state.lighterPx, px.lighter, onlyMissing)) any = true;
+        if (copyMap(state.lighterFr, fr.lighter, onlyMissing)) any = true;
+        if (copyMap(state.lighterTaker, tk.lighter, onlyMissing)) any = true;
+        if (copyMap(state.lighterAsk, d.lighter_ask, onlyMissing)) any = true;
+        if (copyMap(state.lighterBid, d.lighter_bid, onlyMissing)) any = true;
+        if (copyMap(state.arcusPx, px.arcus, onlyMissing)) any = true;
+        if (copyMap(state.arcusFr, fr.arcus, onlyMissing)) any = true;
+        if (copyMap(state.arcusTaker, tk.arcus, onlyMissing)) any = true;
+        if (copyMap(state.nadoPx, px.nado, onlyMissing)) any = true;
+        if (copyMap(state.nadoFr, fr.nado, onlyMissing)) any = true;
+        if (copyMap(state.varPx, px.variational, onlyMissing)) any = true;
+        if (copyMap(state.varFr, fr.variational, onlyMissing)) any = true;
+        if (copyMap(state.ondoPx, px.ondo, onlyMissing)) any = true;
+        if (copyMap(state.ondoPerpsFr, fr.ondo_perps, onlyMissing)) any = true;
+        if (isNum(d.arcus_next_at_ms) && d.arcus_next_at_ms > 0 &&
+            (!onlyMissing || !state.arcusNextAt)) state.arcusNextAt = d.arcus_next_at_ms;
+        if (isNum(d.fetched_at_ms) && d.fetched_at_ms > 0) state.snapshotAt = d.fetched_at_ms;
+        // 注意：这里不设 usingSnapshot。快照只是先填进来，直连成功的家
+        // 会覆盖它；只有直连失败、最后由 fillFailedFromSnapshot 补齐的家，
+        // 才算真正“用快照兜底”，那时才亮快照标记，避免直连全通还误标。
+        return any;
+      }
+      function fillFailedFromSnapshot() {
+        var d = state.snapshotData;
+        if (!d || !d.prices) return;
+        var fr = d.funding_pct_h || {}, tk = d.taker_pct || {};
+        var venueMap = {
+          lighter: [["lighterPx", d.prices.lighter], ["lighterFr", fr.lighter],
+                    ["lighterTaker", tk.lighter], ["lighterAsk", d.lighter_ask],
+                    ["lighterBid", d.lighter_bid]],
+          arcus: [["arcusPx", d.prices.arcus], ["arcusFr", fr.arcus],
+                  ["arcusTaker", tk.arcus]],
+          nado: [["nadoPx", d.prices.nado], ["nadoFr", fr.nado]],
+          variational: [["varPx", d.prices.variational], ["varFr", fr.variational]],
+          ondo: [["ondoPx", d.prices.ondo]],
+          ondoPerps: [["ondoPerpsFr", fr.ondo_perps]]
+        };
+        Object.keys(venueMap).forEach(function (venue) {
+          if (state.health[venue]) return;
+          var filled = false;
+          venueMap[venue].forEach(function (pair) {
+            if (copyMap(state[pair[0]], pair[1], false)) filled = true;
+          });
+          if (filled) {
+            state.health[venue] = true;
+            state.usingSnapshot = true;
+            if (isNum(d.fetched_at_ms)) state.snapshotAt = d.fetched_at_ms;
+            if (venue === "arcus" && isNum(d.arcus_next_at_ms)) state.arcusNextAt = d.arcus_next_at_ms;
+          }
+        });
+      }
+      function loadSnapshot() {
+        return fetchJSON("data.json", 10000).then(function (d) {
+          state.snapshotData = d;
+          if (applySnapshot(d, false)) renderAll();
+        }).catch(function () {});
+      }
 
       /* ---------------- 主循环 ---------------- */
       var refreshing = false;
       function refresh() {
         if (refreshing) return Promise.resolve();
         refreshing = true;
+        state.usingSnapshot = false;
         $("refreshBtn").disabled = true;
         // 渐进渲染：每家数据一到就先画出来，不等全部 6 家拉完才首屏
         // （慢源/被跨域拦截的源不再拖住整页停留在「正在拉取」）。
@@ -840,16 +933,22 @@
         var ondoPerpsJob = loadOndoPerps().then(function () { state.health.ondoPerps = true; })
           .catch(function () { state.health.ondoPerps = false; })
           .then(function () { renderAll(); });
+        // 同站快照与直连并行跑：直连通的家用直连实时值，直连失败的家
+        // 等直连全部落定后用快照补齐，绝不让失败的家把快照值清掉。
+        var snapshotJob = loadSnapshot();
 
         return Promise.all([lighterJob, arcusJob, nadoJob, varJob, ondoJob, ondoPerpsJob]).then(function () {
-          var anyOk = state.health.lighter || state.health.arcus || state.health.nado ||
-            state.health.variational || state.health.ondo;
-          state.allFailed = !anyOk;
-          if (anyOk) state.lastOk = Date.now();
-          state.nextAt = Date.now() + REFRESH_MS;
-          refreshing = false;
-          $("refreshBtn").disabled = false;
-          renderAll();
+          return snapshotJob.then(function () {
+            fillFailedFromSnapshot();
+            var anyOk = state.health.lighter || state.health.arcus || state.health.nado ||
+              state.health.variational || state.health.ondo;
+            state.allFailed = !anyOk;
+            if (anyOk) state.lastOk = Date.now();
+            state.nextAt = Date.now() + REFRESH_MS;
+            refreshing = false;
+            $("refreshBtn").disabled = false;
+            renderAll();
+          });
         });
       }
 
