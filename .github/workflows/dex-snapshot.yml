@@ -1,0 +1,32 @@
+name: dex-snapshot
+
+# 每 15 分钟在跑手上直连 6 家接口抓一次，写成仓库根目录 data.json。
+# 网页版直连失败时改读同站 data.json，用户浏览器就不用再直连那 6 家。
+# 纯公开行情，无密钥、无交易操作。
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install requests
+        run: pip install requests
+      - name: Fetch snapshot
+        run: python3 scripts/fetch_snapshot.py data.json
+      - name: Commit snapshot if changed
+        run: |
+          git config user.name "dex-snapshot-bot"
+          git config user.email "dex-snapshot-bot@users.noreply.github.com"
+          git add data.json
+          git diff --cached --quiet || git commit -m "chore: update dex snapshot"
+          git push
