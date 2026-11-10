@@ -129,6 +129,7 @@
       td.dim { color: var(--ink-3); }
       tr.row-alert { background: var(--alert-bg); }
       tr.row-alert:hover { background: var(--alert-bg); }
+      tr.group-head td { background: var(--surface-2); font-size: 12.5px; font-weight: 700; color: var(--ink-2); }
       .badge {
         display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px;
         border-radius: 999px; margin-left: 7px; vertical-align: 1px;
@@ -233,7 +234,7 @@
       <section>
         <div class="sec-head">
           <h2>资金费率对比 · 每小时</h2>
-          <span class="note">与 App 版同一口径：五家永续统一折算为每小时费率 %/h（正 = 多头付空头）。Lighter 取实时费率 current_funding_rate，Arcus 取下期预测费率 nextFundingRate（与各自前端显示一致）；最大年化差 = 五家最高与最低费率之差 × 24 × 365（单腿本金），≥ 150% 标出。Ondo Perps 列为第三方聚合 loris.tools（只有费率、无价格）。<span id="fundNextAt"></span></span>
+          <span class="note">与 App 版同一口径：五家永续统一折算为每小时费率 %/h（正 = 多头付空头）。Lighter 取实时费率 current_funding_rate，Arcus 取下期预测费率 nextFundingRate（与各自前端显示一致）；最大年化差 = 五家最高与最低费率之差 × 24 × 365（单腿本金），≥ 150% 标出。Ondo Perps 列为第三方聚合 loris.tools（只有费率、无价格）。下方单列大宗商品：XAU/XAG/SLV/USO 为多家费率，XAUT 为 Nado 与 Variational 两家，WTI 仅 Nado 一家、只作观察。Arcus 的金是 GLD、Lighter 的金是 XAU，不是同一标的，不直接比。<span id="fundNextAt"></span></span>
         </div>
         <div class="table-card">
           <table id="fundTable">
@@ -727,28 +728,63 @@
         $("execBody").innerHTML = rows.join("");
       }
 
+      function fundingRow(s) { // 有 ≥2 家费率的正常行
+        var fm = fundingMax(s);
+        if (!fm) return "";
+        var alert = fm.ann >= FUND_ALERT;
+        return '<tr' + (alert ? ' class="row-alert"' : "") + '>' +
+          '<td class="sym" data-th="">' + esc(s) + (alert ? '<span class="badge fund">费率差超阈值</span>' : "") + "</td>" +
+          rateCell(state.lighterFr[s], "Lighter") +
+          rateCell(state.arcusFr[s], "Arcus") +
+          rateCell(state.nadoFr[s], "Nado") +
+          rateCell(state.varFr[s], "Variational") +
+          rateCell(state.ondoPerpsFr[s], "Ondo Perps") +
+          '<td class="num" data-th="最大年化差"><b>' + fmtPctU(fm.ann, 1) + "</b></td>" +
+          dimCell("+$" + fm.hourlyEst.toFixed(2) + " / $1,000", "估算/小时") +
+          '<td class="dir" data-th="收钱方向">' + pairText(fm) + "</td>" +
+          "</tr>";
+      }
+      function fundingSingleRow(s) { // 只有 1 家有费率的观察行（目前是 WTI）
+        var venues = [["lighter", state.lighterFr[s]], ["arcus", state.arcusFr[s]],
+          ["nado", state.nadoFr[s]], ["variational", state.varFr[s]],
+          ["ondo_perps", state.ondoPerpsFr[s]]].filter(function (v) { return isNum(v[1]); });
+        if (venues.length !== 1) return "";
+        return "<tr>" +
+          '<td class="sym" data-th="">' + esc(s) + "</td>" +
+          rateCell(state.lighterFr[s], "Lighter") +
+          rateCell(state.arcusFr[s], "Arcus") +
+          rateCell(state.nadoFr[s], "Nado") +
+          rateCell(state.varFr[s], "Variational") +
+          rateCell(state.ondoPerpsFr[s], "Ondo Perps") +
+          dimCell("—", "最大年化差") + dimCell("—", "估算/小时") +
+          '<td class="dir" data-th="收钱方向">仅 ' + VENUE_NAMES[venues[0][0]] + " 有此标的，暂无费差</td>" +
+          "</tr>";
+      }
       function renderFunding() {
-        var syms = ALL.filter(function (s) { return fundingMax(s); });
-        syms.sort(function (x, y) { return fundingMax(y).ann - fundingMax(x).ann; });
-        if (!syms.length) {
+        // 主标的与大宗商品分两组显示：大宗商品行以前混在主表里按年化差
+        // 排序、沉到底部看不见；WTI 只有 Nado 一家、算不出费差，单独放
+        // 一行观察。XAUT 有 Nado 与 Variational 两家，走正常行。
+        var CMDTY_FUND = ["XAU", "XAUT", "XAG", "SLV", "USO", "WTI"];
+        var mainSyms = SYMBOLS.filter(function (s) { return fundingMax(s); });
+        mainSyms.sort(function (x, y) { return fundingMax(y).ann - fundingMax(x).ann; });
+        var cmdtySyms = CMDTY_FUND.filter(function (s) { return fundingMax(s); });
+        cmdtySyms.sort(function (x, y) { return fundingMax(y).ann - fundingMax(x).ann; });
+        var singleRow = fundingSingleRow("WTI");
+        if (!mainSyms.length && !cmdtySyms.length && !singleRow) {
           $("fundBody").innerHTML = '<tr><td colspan="9"><div class="empty-note">暂无费率数据</div></td></tr>';
           return;
         }
-        $("fundBody").innerHTML = syms.map(function (s) {
-          var fm = fundingMax(s);
-          var alert = fm.ann >= FUND_ALERT;
-          return '<tr' + (alert ? ' class="row-alert"' : "") + '>' +
-            '<td class="sym" data-th="">' + esc(s) + (alert ? '<span class="badge fund">费率差超阈值</span>' : "") + "</td>" +
-            rateCell(state.lighterFr[s], "Lighter") +
-            rateCell(state.arcusFr[s], "Arcus") +
-            rateCell(state.nadoFr[s], "Nado") +
-            rateCell(state.varFr[s], "Variational") +
-            rateCell(state.ondoPerpsFr[s], "Ondo Perps") +
-            '<td class="num" data-th="最大年化差"><b>' + fmtPctU(fm.ann, 1) + "</b></td>" +
-            dimCell("+$" + fm.hourlyEst.toFixed(2) + " / $1,000", "估算/小时") +
-            '<td class="dir" data-th="收钱方向">' + pairText(fm) + "</td>" +
-            "</tr>";
-        }).join("");
+        var html = "";
+        if (mainSyms.length) {
+          html += '<tr class="group-head"><td colspan="9">主标的</td></tr>';
+          html += mainSyms.map(fundingRow).join("");
+        }
+        if (cmdtySyms.length || singleRow) {
+          html += '<tr class="group-head"><td colspan="9">大宗商品 · 黄金 / 白银 / 石油</td></tr>';
+          html += cmdtySyms.map(fundingRow).join("");
+          html += singleRow;
+        }
+        $("fundBody").innerHTML = html;
       }
 
       function renderOil() {
