@@ -574,7 +574,7 @@
             if (!sm) continue;
             var cells = rowHtml.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/gi) || [];
             if (cells.length < 3) continue;
-            var bps = parseFloat(stripTags(cells[2])); // 第 3 格：8h 口径 bps
+            var bps = parseFloat(stripTags(cells[1])); // 第 2 格：8h 口径 bps（2026-11-28 核实：表头 Market | Rate (8h bps) | Annualized APR | Actions，第 3 格是年化%，取错会放大 ~11 倍）
             if (!isFinite(bps)) continue;
             out[sm[1].toUpperCase()] = bps / 800; // bps/8h -> %/h
             rows++;

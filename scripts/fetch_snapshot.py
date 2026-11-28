@@ -344,7 +344,7 @@ def ondo_perps():
         cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S)
         if len(cells) < 3:
             continue
-        txt = re.sub(r"<[^>]+>", " ", cells[2])
+        txt = re.sub(r"<[^>]+>", " ", cells[1])  # 第 2 格：8h 口径 bps（2026-11-28 核实：第 3 格是年化%，取错会放大 ~11 倍）
         try:
             bps = float(txt.strip())
         except ValueError:
